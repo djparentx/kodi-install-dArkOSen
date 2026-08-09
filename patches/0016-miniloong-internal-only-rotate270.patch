@@ -1,232 +1,498 @@
-diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
-index ed60528..cac7ee3 100644
---- a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
-+++ b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
-@@ -22,10 +22,75 @@
- #include "windowing/WinSystem.h"
- #include "windowing/linux/WinSystemEGL.h"
+diff --git a/xbmc/windowing/gbm/CMakeLists.txt b/xbmc/windowing/gbm/CMakeLists.txt
+index 91085f8..ecb03bc 100644
+--- a/xbmc/windowing/gbm/CMakeLists.txt
++++ b/xbmc/windowing/gbm/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ add_subdirectory(drm)
  
-+#include <cctype>
-+#include <cstdlib>
-+#include <fstream>
- #include <memory>
-+#include <string>
+ set(SOURCES OptionalsReg.cpp
++            RGARotate.cpp
+             WinSystemGbm.cpp
+             VideoSyncGbm.cpp
+             GBMUtils.cpp
+@@ -8,6 +9,7 @@ set(SOURCES OptionalsReg.cpp
+             GBMDPMSSupport.cpp)
  
- using namespace KODI::UTILS::EGL;
+ set(HEADERS OptionalsReg.h
++            RGARotate.h
+             WinSystemGbm.h
+             VideoSyncGbm.h
+             GBMUtils.h
+@@ -24,3 +26,12 @@ if(TARGET OpenGL::GLES)
+ endif()
  
+ core_add_library(windowing_gbm)
 +
-+namespace
++# dArkOS: RGA software display rotation. Whether it activates is decided at
++# Kodi runtime (CDRMUtils::InitDrm() checks /home/ark/.config/.DEVICE for
++# "Miniloong" — see DRMUtils.cpp and RGARotate.cpp), not by a cmake flag, so
++# this is linked unconditionally. librga + headers are installed for all
++# rk3566 64-bit builds by build_deps.sh (BSP librga, RGA3 ABI) at
++# /usr/local/include/rga.
++target_include_directories(${CORE_LIBRARY} PRIVATE /usr/local/include)
++target_link_libraries(${CORE_LIBRARY} PRIVATE rga)
+diff --git a/xbmc/windowing/gbm/RGARotate.cpp b/xbmc/windowing/gbm/RGARotate.cpp
+new file mode 100644
+index 0000000..523b4d6
+--- /dev/null
++++ b/xbmc/windowing/gbm/RGARotate.cpp
+@@ -0,0 +1,99 @@
++/*
++ *  Copyright (C) 2005-2018 Team Kodi
++ *  This file is part of Kodi - https://kodi.tv
++ *
++ *  SPDX-License-Identifier: GPL-2.0-or-later
++ *  See LICENSES/README.md for more information.
++ */
++
++#include "RGARotate.h"
++
++#include "utils/log.h"
++
++#include <unistd.h>
++
++using namespace KODI::WINDOWING::GBM;
++
++CRGARotate::CRGARotate(gbm_device* dev, int frameWidth, int frameHeight) : m_dev(dev)
 +{
-+bool MiniLoongDeviceFileMatches()
-+{
-+  std::ifstream deviceFile("/home/ark/.config/.DEVICE");
-+  std::string device;
-+  if (!deviceFile || !std::getline(deviceFile, device))
-+    return false;
++  // initialize the 2D raster graphic acceleration unit (RGA)
++  c_RkRgaInit();
 +
-+  for (auto& c : device)
-+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++  // RGA requires the buffer (virtual) height to be a multiple of 32.
++  int allocHeight = frameHeight;
++  if (allocHeight % 32 != 0)
++    allocHeight = (frameHeight + 32) & (~31);
 +
-+  return device.find("miniloong") != std::string::npos;
-+}
-+
-+bool OutputNameIsHDMI(std::string output)
-+{
-+  for (auto& c : output)
-+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-+
-+  return output.find("hdmi") != std::string::npos;
-+}
-+
-+bool MiniLoongHDMIConnected()
-+{
-+  auto winSystem = CServiceBroker::GetWinSystem();
-+  if (!winSystem)
-+    return false;
-+
-+  for (const auto& output : winSystem->GetConnectedOutputs())
++  // Allocate the pool of rotated portrait scanout buffers.
++  for (int i = 0; i < RGA_BUFFERS_MAX; ++i)
 +  {
-+    if (OutputNameIsHDMI(output))
-+      return true;
++    m_buffers[i] = gbm_bo_create(m_dev, frameWidth, allocHeight, GBM_FORMAT_XRGB8888,
++                                 GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
++    if (!m_buffers[i])
++    {
++      CLog::Log(LOGERROR, "CRGARotate::{} - failed to allocate rotation buffer {}", __FUNCTION__, i);
++      return;
++    }
++
++    m_bufferPrimeFds[i] = gbm_bo_get_fd(m_buffers[i]);
 +  }
 +
-+  return false;
++  // source: the landscape rendered buffer. Width/height are swapped relative to
++  // the destination because we rotate 270 degrees. The virtual width (stride)
++  // uses the padded height to match the destination buffer layout.
++  m_srcInfo.fd = -1;
++  m_srcInfo.mmuFlag = 1;
++  m_srcInfo.rotation = HAL_TRANSFORM_ROT_270;
++  rga_set_rect(&m_srcInfo.rect, 0, 0, frameHeight, frameWidth, allocHeight, frameWidth,
++               RK_FORMAT_BGRA_8888);
++
++  // destination: the portrait scanout buffer.
++  m_dstInfo.fd = -1;
++  m_dstInfo.mmuFlag = 1;
++  rga_set_rect(&m_dstInfo.rect, 0, 0, frameWidth, frameHeight, frameWidth, frameHeight,
++               RK_FORMAT_BGRA_8888);
++
++  m_valid = true;
++  CLog::Log(LOGDEBUG, "CRGARotate::{} - initialized RGA rotation {}x{} -> {}x{} (ROT_270)",
++            __FUNCTION__, frameHeight, frameWidth, frameWidth, frameHeight);
 +}
 +
-+bool IsMiniLoongInternalDisplayRotationEnabled()
++CRGARotate::~CRGARotate()
 +{
-+  if (const char* env = std::getenv("KODI_MINILOONG_ROTATE"))
-+  {
-+    std::string value(env);
-+    for (auto& c : value)
-+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++  if (m_srcFd >= 0)
++    close(m_srcFd);
 +
-+    if (value == "0" || value == "false" || value == "no" || value == "off")
-+      return false;
++  for (int i = 0; i < RGA_BUFFERS_MAX; ++i)
++  {
++    if (m_bufferPrimeFds[i] > 0)
++      close(m_bufferPrimeFds[i]);
++    if (m_buffers[i])
++      gbm_bo_destroy(m_buffers[i]);
 +  }
 +
-+  if (!MiniLoongDeviceFileMatches())
-+    return false;
-+
-+  if (MiniLoongHDMIConnected())
-+    return false;
-+
-+  return true;
-+}
++  c_RkRgaDeInit();
 +}
 +
- CRendererDRMPRIMEGLES::~CRendererDRMPRIMEGLES()
++gbm_bo* CRGARotate::Rotate(gbm_bo* src)
++{
++  if (!m_valid)
++    return src;
++
++  gbm_bo* dst = m_buffers[m_bufferIndex];
++
++  // gbm_bo_get_fd dups a new dmabuf fd on every call; close the previous one to
++  // avoid leaking a descriptor per frame.
++  if (m_srcFd >= 0)
++    close(m_srcFd);
++  m_srcFd = gbm_bo_get_fd(src);
++
++  m_srcInfo.fd = m_srcFd;
++  m_dstInfo.fd = m_bufferPrimeFds[m_bufferIndex];
++
++  if (c_RkRgaBlit(&m_srcInfo, &m_dstInfo, nullptr) < 0)
++    CLog::Log(LOGERROR, "CRGARotate::{} - RGA blit failed", __FUNCTION__);
++
++  m_bufferIndex = (m_bufferIndex + 1) % RGA_BUFFERS_MAX;
++
++  return dst;
++}
+diff --git a/xbmc/windowing/gbm/RGARotate.h b/xbmc/windowing/gbm/RGARotate.h
+new file mode 100644
+index 0000000..55a5e17
+--- /dev/null
++++ b/xbmc/windowing/gbm/RGARotate.h
+@@ -0,0 +1,80 @@
++/*
++ *  Copyright (C) 2005-2018 Team Kodi
++ *  This file is part of Kodi - https://kodi.tv
++ *
++ *  SPDX-License-Identifier: GPL-2.0-or-later
++ *  See LICENSES/README.md for more information.
++ */
++
++#pragma once
++
++// dArkOS rk3566 software display rotation via the Rockchip RGA 2D blitter.
++// Some rk3566 handhelds (e.g. the miniloong) have a physically
++// portrait (720x960) panel used in landscape. kodi-gbm scans out directly
++// through GBM/KMS and bypasses the patched SDL2 that rotates every other app,
++// so the GUI appears sideways on those devices. The VOP2 has no hardware
++// ROTATE_270 (Esmart planes only), so we rotate each rendered frame with RGA
++// before page-flip, mirroring sdl2-patch-0004.
++//
++// Whether to rotate is decided at Kodi runtime, not at compile time:
++// CDRMUtils::InitDrm() checks /home/ark/.config/.DEVICE for "MINILOONG" and
++// only sets m_rotate when it finds it (see DRMUtils.cpp). CRGARotate is only
++// ever constructed by WinSystemGbmEGLContext when m_DRM->IsRotated() is true,
++// so on every other device this class is simply never instantiated.
++
++#include <memory>
++
++#include <gbm.h>
++
++#include <rga/RgaApi.h>
++#include <rga/drmrga.h>
++#include <rga/rga.h>
++
++namespace KODI
++{
++namespace WINDOWING
++{
++namespace GBM
++{
++
++class CRGARotate
++{
++public:
++  /*!
++   * \brief Create the rotation engine and its pool of rotated scanout buffers.
++   * \param dev the gbm device used to allocate the rotated buffers
++   * \param frameWidth native (portrait) panel width  — the rotated buffer width
++   * \param frameHeight native (portrait) panel height — the rotated buffer height
++   */
++  CRGARotate(gbm_device* dev, int frameWidth, int frameHeight);
++  ~CRGARotate();
++
++  CRGARotate(const CRGARotate&) = delete;
++  CRGARotate& operator=(const CRGARotate&) = delete;
++
++  /*!
++   * \brief Rotate a landscape source buffer 270 degrees into a pooled portrait
++   *        scanout buffer.
++   * \param src the landscape (960x720) front buffer produced by the GL surface
++   * \return a pooled portrait (720x960) buffer holding the rotated frame, ready
++   *         to hand to DRM page-flip.
++   */
++  gbm_bo* Rotate(gbm_bo* src);
++
++private:
++  static constexpr int RGA_BUFFERS_MAX = 3;
++
++  gbm_device* m_dev{nullptr};
++  gbm_bo* m_buffers[RGA_BUFFERS_MAX]{};
++  int m_bufferPrimeFds[RGA_BUFFERS_MAX]{};
++  int m_bufferIndex{0};
++  int m_srcFd{-1};
++  bool m_valid{false};
++
++  rga_info_t m_srcInfo{};
++  rga_info_t m_dstInfo{};
++};
++
++} // namespace GBM
++} // namespace WINDOWING
++} // namespace KODI
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.cpp b/xbmc/windowing/gbm/WinSystemGbm.cpp
+index 72497a2..7f331a4 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.cpp
++++ b/xbmc/windowing/gbm/WinSystemGbm.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "GBMDPMSSupport.h"
+ #include "OptionalsReg.h"
++#include "RGARotate.h"
+ #include "ServiceBroker.h"
+ #include "VideoSyncGbm.h"
+ #include "cores/VideoPlayer/Buffers/VideoBufferDRMPRIME.h"
+@@ -243,6 +244,10 @@ bool CWinSystemGbm::SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool bl
+   if (!std::dynamic_pointer_cast<CDRMAtomic>(m_DRM))
+   {
+     bo = m_GBM->GetDevice().GetSurface().LockFrontBuffer().Get();
++    // dArkOS rk3566 (miniloong): rotate the landscape buffer to portrait for the
++    // legacy full-buffer modeset. The atomic path locks/rotates in FlipPage.
++    if (m_rgaRotate && bo)
++      bo = m_rgaRotate->Rotate(bo);
+   }
+ 
+   auto result = m_DRM->SetVideoMode(res, bo);
+@@ -291,6 +296,10 @@ void CWinSystemGbm::FlipPage(bool rendered, bool videoLayer, bool async)
+   if (rendered)
+   {
+     bo = m_GBM->GetDevice().GetSurface().LockFrontBuffer().Get();
++    // dArkOS rk3566 (miniloong): RGA-rotate the landscape GL front buffer into a
++    // pooled portrait scanout buffer and flip that instead.
++    if (m_rgaRotate && bo)
++      bo = m_rgaRotate->Rotate(bo);
+   }
+ 
+   m_DRM->FlipPage(bo, rendered, videoLayer, async);
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.h b/xbmc/windowing/gbm/WinSystemGbm.h
+index 9609675..488f792 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.h
++++ b/xbmc/windowing/gbm/WinSystemGbm.h
+@@ -33,6 +33,8 @@ namespace WINDOWING
+ namespace GBM
  {
-   Flush(false);
-@@ -83,6 +148,9 @@ bool CRendererDRMPRIMEGLES::Configure(const VideoPicture& picture,
-   m_sourceHeight = picture.iHeight;
-   m_renderOrientation = orientation;
  
-+  if (IsMiniLoongInternalDisplayRotationEnabled())
-+    m_renderOrientation = (m_renderOrientation + 270) % 360;
++class CRGARotate;
 +
-   m_iFlags = GetFlagsChromaPosition(picture.chroma_position) |
-              GetFlagsColorMatrix(picture.color_space, picture.iWidth, picture.iHeight) |
-              GetFlagsColorPrimaries(picture.color_primaries) |
-diff --git a/xbmc/windowing/GraphicContext.cpp b/xbmc/windowing/GraphicContext.cpp
-index e3300e9..b92fe40 100644
---- a/xbmc/windowing/GraphicContext.cpp
-+++ b/xbmc/windowing/GraphicContext.cpp
-@@ -27,7 +27,73 @@
+ class CWinSystemGbm : public CWinSystemBase
+ {
+ public:
+@@ -92,6 +94,12 @@ protected:
+   XbmcThreads::EndTime<> m_dispResetTimer;
+   std::unique_ptr<CLibInputHandler> m_libinput;
+ 
++  // dArkOS rk3566 (miniloong): RGA software display rotation. Declared after
++  // m_DRM/m_GBM so it destructs first — it owns gbm buffers (allocated from
++  // m_GBM's device) whose DRM framebuffers are torn down using m_DRM's fd.
++  // Explicitly reset in DestroyWindow before the surface/DRM teardown too.
++  std::unique_ptr<CRGARotate> m_rgaRotate;
++
+ private:
+   uint32_t m_hdr_blob_id = 0;
+ 
+diff --git a/xbmc/windowing/gbm/WinSystemGbmEGLContext.cpp b/xbmc/windowing/gbm/WinSystemGbmEGLContext.cpp
+index fac914d..ca7acdb 100644
+--- a/xbmc/windowing/gbm/WinSystemGbmEGLContext.cpp
++++ b/xbmc/windowing/gbm/WinSystemGbmEGLContext.cpp
+@@ -9,10 +9,13 @@
+ #include "WinSystemGbmEGLContext.h"
+ 
+ #include "OptionalsReg.h"
++#include "RGARotate.h"
+ #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
+ #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
  #include "utils/log.h"
  
- #include <cassert>
-+#include <cctype>
-+#include <cstdlib>
-+#include <fstream>
- #include <mutex>
-+#include <string>
++#include <drm_fourcc.h>
 +
-+
-+
-+namespace
-+{
-+bool MiniLoongDeviceFileMatches()
-+{
-+  std::ifstream deviceFile("/home/ark/.config/.DEVICE");
-+  std::string device;
-+  if (!deviceFile || !std::getline(deviceFile, device))
-+    return false;
-+
-+  for (auto& c : device)
-+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-+
-+  return device.find("miniloong") != std::string::npos;
-+}
-+
-+bool OutputNameIsHDMI(std::string output)
-+{
-+  for (auto& c : output)
-+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-+
-+  return output.find("hdmi") != std::string::npos;
-+}
-+
-+bool MiniLoongHDMIConnected()
-+{
-+  auto winSystem = CServiceBroker::GetWinSystem();
-+  if (!winSystem)
-+    return false;
-+
-+  for (const auto& output : winSystem->GetConnectedOutputs())
-+  {
-+    if (OutputNameIsHDMI(output))
-+      return true;
-+  }
-+
-+  return false;
-+}
-+
-+bool IsMiniLoongInternalDisplayRotationEnabled()
-+{
-+  if (const char* env = std::getenv("KODI_MINILOONG_ROTATE"))
-+  {
-+    std::string value(env);
-+    for (auto& c : value)
-+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-+
-+    if (value == "0" || value == "false" || value == "no" || value == "off")
-+      return false;
-+  }
-+
-+  if (!MiniLoongDeviceFileMatches())
-+    return false;
-+
-+  if (MiniLoongHDMIConnected())
-+    return false;
-+
-+  return true;
-+}
-+}
+ using namespace KODI::WINDOWING::GBM;
+ using namespace KODI::WINDOWING::LINUX;
  
- CGraphicContext::CGraphicContext() = default;
- CGraphicContext::~CGraphicContext() = default;
-@@ -692,9 +758,60 @@ void CGraphicContext::GetGUIScaling(const RESOLUTION_INFO &res, float &scaleX, f
-     scaleY = fFromHeight / fToHeight;
-     if (matrix)
-     {
--      TransformMatrix guiScaler = TransformMatrix::CreateScaler(fToWidth / fFromWidth, fToHeight / fFromHeight, fToHeight / fFromHeight);
--      TransformMatrix guiOffset = TransformMatrix::CreateTranslation(fToPosX, fToPosY);
--      *matrix = guiOffset * guiScaler;
-+      if (IsMiniLoongInternalDisplayRotationEnabled())
-+      {
-+        constexpr float halfPi = 1.57079632679489661923f;
+@@ -98,6 +101,13 @@ bool CWinSystemGbmEGLContext::CreateNewWindow(const std::string& name,
+   if (plane)
+     modifiers = plane->GetModifiersForFormat(format);
+ 
++  // dArkOS rk3566 (miniloong): RGA cannot read AFBC-tiled buffers, so force the
++  // GL surface to a linear layout when rotating (the format is already forced to
++  // 8bit XRGB8888 in CDRMUtils::FindPlanes). Otherwise the rotated frame is
++  // garbled. res.iWidth/iHeight are the landscape dimensions here.
++  if (m_DRM->IsRotated())
++    modifiers = {DRM_FORMAT_MOD_LINEAR};
 +
-+        /*
-+         * MiniLoong's internal panel is scanned as a 720x960 portrait
-+         * framebuffer, but the handheld is used as a 960x720 landscape
-+         * device. Build Kodi's GUI in logical 960x720 first, then rotate
-+         * that complete landscape coordinate space into the physical
-+         * 720x960 framebuffer:
-+         *
-+         *   physical_x = logical_y
-+         *   physical_y = logical_width - logical_x
-+         *
-+         * The quirk is disabled whenever an HDMI connector is connected,
-+         * so HDMI output keeps Kodi's normal unrotated behavior.
-+         */
-+        const float logicalWidth = static_cast<float>(info.iHeight);
-+        const float logicalHeight = static_cast<float>(info.iWidth);
-+
-+        float logicalToPosX = 0.0f;
-+        float logicalToPosY = 0.0f;
-+        float logicalToWidth = logicalWidth;
-+        float logicalToHeight = logicalHeight;
-+
-+        float fZoom = (100 + CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_LOOKANDFEEL_SKINZOOM)) * 0.01f;
-+
-+        fZoom -= 1.0f;
-+        logicalToPosX -= logicalToWidth * fZoom * 0.5f;
-+        logicalToWidth *= fZoom + 1.0f;
-+
-+        fZoom = fZoom / info.fPixelRatio;
-+        logicalToPosY -= logicalToHeight * fZoom * 0.5f;
-+        logicalToHeight *= fZoom + 1.0f;
-+
-+        scaleX = fFromWidth / logicalToWidth;
-+        scaleY = fFromHeight / logicalToHeight;
-+
-+        TransformMatrix guiScaler = TransformMatrix::CreateScaler(logicalToWidth / fFromWidth,
-+                                                                  logicalToHeight / fFromHeight,
-+                                                                  logicalToHeight / fFromHeight);
-+        TransformMatrix guiOffset = TransformMatrix::CreateTranslation(logicalToPosX,
-+                                                                       logicalToPosY);
-+        TransformMatrix rotate270 = TransformMatrix::CreateTranslation(0.0f, logicalWidth) *
-+                                    TransformMatrix::CreateZRotation(-halfPi, 0.0f, 0.0f);
-+
-+        *matrix = rotate270 * guiOffset * guiScaler;
-+      }
-+      else
-+      {
-+        TransformMatrix guiScaler = TransformMatrix::CreateScaler(fToWidth / fFromWidth, fToHeight / fFromHeight, fToHeight / fFromHeight);
-+        TransformMatrix guiOffset = TransformMatrix::CreateTranslation(fToPosX, fToPosY);
-+        *matrix = guiOffset * guiScaler;
-+      }
-     }
+   if (!m_GBM->GetDevice().CreateSurface(res.iWidth, res.iHeight, format, modifiers.data(),
+                                         modifiers.size()))
+   {
+@@ -105,6 +115,15 @@ bool CWinSystemGbmEGLContext::CreateNewWindow(const std::string& name,
+     return false;
    }
-   else
+ 
++  // dArkOS rk3566 (miniloong): create the RGA rotation engine sized to the native
++  // portrait panel. The landscape GL frames are rotated into its pooled portrait
++  // buffers before page-flip (see CWinSystemGbm::FlipPage).
++  if (m_DRM->IsRotated())
++  {
++    m_rgaRotate = std::make_unique<CRGARotate>(m_GBM->GetDevice().Get(), m_DRM->GetNativeWidth(),
++                                               m_DRM->GetNativeHeight());
++  }
++
+   // This check + the reinterpret cast is for security reason, if the user has outdated platform header files which often is the case
+   static_assert(sizeof(EGLNativeWindowType) == sizeof(gbm_surface*), "Declaration specifier differs in size");
+ 
+@@ -131,6 +150,10 @@ bool CWinSystemGbmEGLContext::CreateNewWindow(const std::string& name,
+ 
+ bool CWinSystemGbmEGLContext::DestroyWindow()
+ {
++  // dArkOS rk3566 (miniloong): tear down the RGA rotation engine (and its DRM
++  // framebuffers) while the DRM fd and GBM device are still valid.
++  m_rgaRotate.reset();
++
+   m_eglContext.DestroySurface();
+ 
+   CLog::Log(LOGDEBUG, "CWinSystemGbmEGLContext::{} - deinitialized GBM", __FUNCTION__);
+diff --git a/xbmc/windowing/gbm/drm/DRMAtomic.cpp b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
+index 70ae92e..7493db1 100644
+--- a/xbmc/windowing/gbm/drm/DRMAtomic.cpp
++++ b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
+@@ -96,8 +96,21 @@ void CDRMAtomic::DrmAtomicCommit(int fb_id, int flags, bool rendered, bool video
+     AddProperty(m_gui_plane, "CRTC_ID", m_crtc->GetCrtcId());
+     AddProperty(m_gui_plane, "SRC_X", 0);
+     AddProperty(m_gui_plane, "SRC_Y", 0);
+-    AddProperty(m_gui_plane, "SRC_W", m_width << 16);
+-    AddProperty(m_gui_plane, "SRC_H", m_height << 16);
++    // dArkOS rk3566 (miniloong): when rotating, the fb handed to the plane is the
++    // RGA-rotated portrait buffer (m_mode->hdisplay x m_mode->vdisplay), not the
++    // landscape GL buffer (m_width x m_height). SRC must match the rotated buffer
++    // or it exceeds the fb bounds and the atomic TEST_ONLY commit silently falls
++    // back (frozen/garbled screen). CRTC_W/H already use m_mode below.
++    if (m_rotate)
++    {
++      AddProperty(m_gui_plane, "SRC_W", m_mode->hdisplay << 16);
++      AddProperty(m_gui_plane, "SRC_H", m_mode->vdisplay << 16);
++    }
++    else
++    {
++      AddProperty(m_gui_plane, "SRC_W", m_width << 16);
++      AddProperty(m_gui_plane, "SRC_H", m_height << 16);
++    }
+     AddProperty(m_gui_plane, "CRTC_X", 0);
+     AddProperty(m_gui_plane, "CRTC_Y", 0);
+     //! @todo: disabled until upstream kernel changes are merged
+diff --git a/xbmc/windowing/gbm/drm/DRMUtils.cpp b/xbmc/windowing/gbm/drm/DRMUtils.cpp
+index 3dd4ee9..f0d01b7 100644
+--- a/xbmc/windowing/gbm/drm/DRMUtils.cpp
++++ b/xbmc/windowing/gbm/drm/DRMUtils.cpp
+@@ -17,12 +17,50 @@
+ 
+ #include "PlatformDefs.h"
+ 
++#include <algorithm>
++#include <cctype>
++#include <fstream>
++
+ using namespace KODI::WINDOWING::GBM;
+ 
+ namespace
+ {
+ const std::string SETTING_VIDEOSCREEN_LIMITGUISIZE = "videoscreen.limitguisize";
+ 
++// dArkOS: some rk3566 handhelds (e.g. the miniloong) have a physically
++// portrait panel used in landscape and need the RGA software rotation path
++// (see RGARotate.h). Rather than gating that at compile time, detect it at
++// Kodi startup by checking the device identity file dArkOS writes for every
++// device. Read once and cached for the life of the process.
++const std::string MINILOONG_DEVICE_FILE = "/home/ark/.config/.DEVICE";
++const std::string MINILOONG_DEVICE_TAG = "MINILOONG";
++
++bool IsMiniloongDevice()
++{
++  static const bool isMiniloong = []()
++  {
++    std::ifstream deviceFile(MINILOONG_DEVICE_FILE);
++    if (!deviceFile.is_open())
++      return false;
++
++    std::string contents((std::istreambuf_iterator<char>(deviceFile)),
++                          std::istreambuf_iterator<char>());
++
++    // Case-insensitive match — dArkOS doesn't guarantee a specific casing for
++    // the contents of .DEVICE, so compare lowercased copies of both sides.
++    std::transform(contents.begin(), contents.end(), contents.begin(),
++                    [](unsigned char c) { return std::tolower(c); });
++
++    std::string tag = MINILOONG_DEVICE_TAG;
++    std::transform(tag.begin(), tag.end(), tag.begin(),
++                    [](unsigned char c) { return std::tolower(c); });
++
++    return contents.find(tag) != std::string::npos;
++  }();
++
++  return isMiniloong;
++}
++
+ void DrmFbDestroyCallback(gbm_bo* bo, void* data)
+ {
+   drm_fb* fb = static_cast<drm_fb*>(data);
+@@ -239,7 +277,9 @@ bool CDRMUtils::FindPlanes()
+     CLog::Log(LOGDEBUG, "CDRMUtils::{} - using video plane {}", __FUNCTION__,
+               m_video_plane->GetPlaneId());
+ 
+-  if (m_gui_plane->SupportsFormat(DRM_FORMAT_XRGB2101010))
++  // RGA cannot rotate 10bit XRGB2101010 buffers — force 8bit when rotating so
++  // the GL surface, the rotated scanout buffer and the plane all agree on format.
++  if (m_gui_plane->SupportsFormat(DRM_FORMAT_XRGB2101010) && !m_rotate)
+   {
+     m_gui_plane->SetFormat(DRM_FORMAT_XRGB2101010);
+     CLog::Log(LOGDEBUG, "CDRMUtils::{} - using 10bit gui plane {}", __FUNCTION__,
+@@ -397,6 +437,15 @@ bool CDRMUtils::InitDrm()
+   if (m_fd < 0)
+     return false;
+ 
++  // dArkOS: enable RGA software rotation when /home/ark/.config/.DEVICE
++  // identifies this as a Miniloong device. Set before planes/resolutions are
++  // enumerated so the GUI is configured landscape while the panel mode stays
++  // portrait.
++  m_rotate = IsMiniloongDevice();
++  if (m_rotate)
++    CLog::Log(LOGINFO, "CDRMUtils::{} - RGA software display rotation enabled (ROT_270) - Miniloong device detected",
++              __FUNCTION__);
++
+   /* caps need to be set before allocating connectors, encoders, crtcs, and planes */
+   int ret = drmSetClientCap(m_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+   if (ret)
+@@ -643,6 +692,14 @@ RESOLUTION_INFO CDRMUtils::GetResolutionInfo(drmModeModeInfoPtr mode)
+   RESOLUTION_INFO res;
+   res.iScreenWidth = mode->hdisplay;
+   res.iScreenHeight = mode->vdisplay;
++
++  // dArkOS rk3566 (miniloong): report landscape dimensions to the GUI/GL while
++  // the underlying drmModeModeInfo stays portrait. RGA rotates each rendered
++  // landscape frame back to portrait before scanout. strId/strMode are left
++  // alone — SetMode() selects the mode by strId, not by these dimensions.
++  if (m_rotate)
++    std::swap(res.iScreenWidth, res.iScreenHeight);
++
+   res.iWidth = res.iScreenWidth;
+   res.iHeight = res.iScreenHeight;
+ 
+diff --git a/xbmc/windowing/gbm/drm/DRMUtils.h b/xbmc/windowing/gbm/drm/DRMUtils.h
+index f92f716..12c47c7 100644
+--- a/xbmc/windowing/gbm/drm/DRMUtils.h
++++ b/xbmc/windowing/gbm/drm/DRMUtils.h
+@@ -54,6 +54,14 @@ public:
+   CDRMCrtc* GetCrtc() const { return m_crtc; }
+   CDRMConnector* GetConnector() const { return m_connector; }
+ 
++  // dArkOS rk3566 (miniloong): software display rotation via RGA. When active,
++  // the GUI/GL render landscape (m_width x m_height) while the CRTC mode and the
++  // rotated scanout buffer stay portrait (m_mode->hdisplay x m_mode->vdisplay).
++  bool IsRotated() const { return m_rotate; }
++  // Native (unrotated) panel dimensions — the size of the rotated scanout buffer.
++  int GetNativeWidth() const { return m_mode ? m_mode->hdisplay : 0; }
++  int GetNativeHeight() const { return m_mode ? m_mode->vdisplay : 0; }
++
+   std::vector<std::string> GetConnectedConnectorNames();
+ 
+   virtual RESOLUTION_INFO GetCurrentMode();
+@@ -86,6 +94,10 @@ protected:
+   int m_width = 0;
+   int m_height = 0;
+ 
++  // dArkOS rk3566: true when RGA software rotation is enabled for this device,
++  // detected at runtime in InitDrm() from /home/ark/.config/.DEVICE.
++  bool m_rotate{false};
++
+   int m_inFenceFd{-1};
+   int m_outFenceFd{-1};
+ 
