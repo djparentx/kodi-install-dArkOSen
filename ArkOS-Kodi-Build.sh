@@ -76,6 +76,14 @@ do
     fi
 done
 
+# dArkOSen: rotated build variant only — 0016 is excluded from the normal job,
+# so this is a no-op there. Forces RGA rotation unconditionally instead of the
+# runtime Miniloong device-file check, since normal/rotated are now separate
+# build artifacts rather than one runtime-detected binary.
+if grep -q "IsMiniloongDevice" xbmc/windowing/gbm/drm/DRMUtils.cpp 2>/dev/null; then
+  sed -i 's/m_rotate = IsMiniloongDevice();/m_rotate = true;/' xbmc/windowing/gbm/drm/DRMUtils.cpp
+fi
+
 cd ../kodi-build
 if [ -d "/home/kodi/bin-kodi" ]; then
   rm -rf /home/kodi/bin-kodi

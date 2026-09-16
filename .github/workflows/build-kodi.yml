@@ -1,0 +1,151 @@
+name: Build Kodi
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      kodi_tag:
+        description: 'xbmc/xbmc git tag to build (e.g. 21.3-Omega)'
+        required: false
+        default: '21.3-Omega'
+
+env:
+  KODI_TAG: ${{ github.event.inputs.kodi_tag || '21.3-Omega' }}
+
+jobs:
+  kodi-normal:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Prepare /home/kodi
+        run: |
+          sudo mkdir -p /home/kodi
+          sudo chown -R "$USER":"$USER" /home/kodi
+
+      - name: Checkout repo into /home/kodi/kodi-install
+        uses: actions/checkout@v4
+        with:
+          path: /home/kodi/kodi-install
+
+      - name: Exclude rotation patch from normal build
+        run: rm -f /home/kodi/kodi-install/patches/0016-miniloong-internal-only-rotate270.patch
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git patch cmake pkg-config ccache \
+            autoconf automake autopoint gettext autotools-dev curl default-jre \
+            doxygen gawk gperf libasound2-dev libass-dev libavahi-client-dev \
+            libavahi-common-dev libbluetooth-dev libbluray-dev libbz2-dev \
+            libcdio-dev libp8-platform-dev libcurl4-openssl-dev libcwiid-dev \
+            libdbus-1-dev libdrm-dev libegl1-mesa-dev libflac-dev libfmt-dev \
+            libfontconfig-dev libfreetype-dev libfribidi-dev libfstrcmp-dev \
+            libgcrypt20-dev libgif-dev libgles2-mesa-dev libgnutls28-dev \
+            libgpg-error-dev libjpeg-dev liblcms2-dev libltdl-dev liblzo2-dev \
+            libmicrohttpd-dev libnfs-dev libogg-dev libplist-dev libpng-dev \
+            libsmbclient-dev libspdlog-dev libsqlite3-dev libssl-dev libtag1-dev \
+            libtinyxml-dev libtinyxml2-dev libtool libudev-dev libunistring-dev \
+            libva-dev libvorbis-dev libxslt1-dev nasm python3-dev python3-pil \
+            rapidjson-dev swig unzip uuid-dev zip zlib1g-dev \
+            libflatbuffers-dev libgbm-dev libinput-dev libxkbcommon-dev \
+            libdisplay-info-dev
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/kodi/.ccache
+          key: kodi-ccache-normal-${{ github.sha }}
+          restore-keys: |
+            kodi-ccache-normal-
+
+      - name: Build Kodi (normal)
+        env:
+          CCACHE_DIR: /home/kodi/.ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          cd /home/kodi/kodi-install
+          env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
+
+      - name: Locate output archive
+        id: out
+        run: |
+          VER_NUM=$(echo "$KODI_TAG" | sed 's/-.*//')
+          echo "path=/home/kodi/Kodi-${VER_NUM}.tar.xz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Kodi (normal) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-normal
+          path: ${{ steps.out.outputs.path }}
+
+  kodi-rotated:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Prepare /home/kodi
+        run: |
+          sudo mkdir -p /home/kodi
+          sudo chown -R "$USER":"$USER" /home/kodi
+
+      - name: Checkout repo into /home/kodi/kodi-install
+        uses: actions/checkout@v4
+        with:
+          path: /home/kodi/kodi-install
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git patch cmake pkg-config ccache \
+            autoconf automake autopoint gettext autotools-dev curl default-jre \
+            doxygen gawk gperf libasound2-dev libass-dev libavahi-client-dev \
+            libavahi-common-dev libbluetooth-dev libbluray-dev libbz2-dev \
+            libcdio-dev libp8-platform-dev libcurl4-openssl-dev libcwiid-dev \
+            libdbus-1-dev libdrm-dev libegl1-mesa-dev libflac-dev libfmt-dev \
+            libfontconfig-dev libfreetype-dev libfribidi-dev libfstrcmp-dev \
+            libgcrypt20-dev libgif-dev libgles2-mesa-dev libgnutls28-dev \
+            libgpg-error-dev libjpeg-dev liblcms2-dev libltdl-dev liblzo2-dev \
+            libmicrohttpd-dev libnfs-dev libogg-dev libplist-dev libpng-dev \
+            libsmbclient-dev libspdlog-dev libsqlite3-dev libssl-dev libtag1-dev \
+            libtinyxml-dev libtinyxml2-dev libtool libudev-dev libunistring-dev \
+            libva-dev libvorbis-dev libxslt1-dev nasm python3-dev python3-pil \
+            rapidjson-dev swig unzip uuid-dev zip zlib1g-dev \
+            libflatbuffers-dev libgbm-dev libinput-dev libxkbcommon-dev \
+            libdisplay-info-dev
+
+      - name: Install vendored librga (device-extracted, RGA2-Lite2)
+        run: |
+          sudo mkdir -p /usr/local/include/rga
+          sudo cp /home/kodi/kodi-install/vendor/rga/include/*.h /usr/local/include/rga/
+          sudo cp /home/kodi/kodi-install/vendor/rga/lib/librga.so* /usr/local/lib/
+          sudo ldconfig
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/kodi/.ccache
+          key: kodi-ccache-rotated-${{ github.sha }}
+          restore-keys: |
+            kodi-ccache-rotated-
+
+      - name: Build Kodi (rotated)
+        env:
+          CCACHE_DIR: /home/kodi/.ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          cd /home/kodi/kodi-install
+          env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
+
+      - name: Locate and rename output archive
+        id: out
+        run: |
+          VER_NUM=$(echo "$KODI_TAG" | sed 's/-.*//')
+          mv "/home/kodi/Kodi-${VER_NUM}.tar.xz" "/home/kodi/Kodi-${VER_NUM}-rotated.tar.xz"
+          echo "path=/home/kodi/Kodi-${VER_NUM}-rotated.tar.xz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Kodi (rotated) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-rotated
+          path: ${{ steps.out.outputs.path }}
