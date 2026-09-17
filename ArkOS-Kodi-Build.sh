@@ -88,7 +88,7 @@ cd ../kodi-build
 if [ -d "/home/kodi/bin-kodi" ]; then
   rm -rf /home/kodi/bin-kodi
 fi
-cmake ../kodi-source -DCMAKE_INSTALL_PREFIX=/home/kodi/bin-kodi -DENABLE_INTERNAL_FLATBUFFERS=ON -DENABLE_INTERNAL_FMT=ON -DENABLE_INTERNAL_SPDLOG=ON -DENABLE_INTERNAL_DAV1D=ON -DENABLE_INTERNAL_PCRE=ON -DCORE_PLATFORM_NAME=gbm -DAPP_RENDER_SYSTEM=gles
+cmake ../kodi-source -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/home/kodi/bin-kodi -DENABLE_INTERNAL_FLATBUFFERS=ON -DENABLE_INTERNAL_FMT=ON -DENABLE_INTERNAL_SPDLOG=ON -DENABLE_INTERNAL_DAV1D=ON -DENABLE_INTERNAL_PCRE=ON -DCORE_PLATFORM_NAME=gbm -DAPP_RENDER_SYSTEM=gles
 if [ $? != 0 ]; then
   echo ""
   echo "There was an issue with configuring the kodi source.  Stopping here."
