@@ -55,7 +55,7 @@ jobs:
                 libva-dev libvorbis-dev libxslt1-dev nasm python3-dev python3-pil \
                 rapidjson-dev swig unzip uuid-dev zip zlib1g-dev \
                 libflatbuffers-dev libgbm-dev libinput-dev libxkbcommon-dev \
-                libdisplay-info-dev meson ninja-build
+                libdisplay-info-dev meson ninja-build libgtest-dev
 
               mkdir -p /home/kodi
               cp -r /workspace /home/kodi/kodi-install
@@ -123,7 +123,7 @@ jobs:
                 libva-dev libvorbis-dev libxslt1-dev nasm python3-dev python3-pil \
                 rapidjson-dev swig unzip uuid-dev zip zlib1g-dev \
                 libflatbuffers-dev libgbm-dev libinput-dev libxkbcommon-dev \
-                libdisplay-info-dev meson ninja-build
+                libdisplay-info-dev meson ninja-build libgtest-dev
 
               mkdir -p /home/kodi
               cp -r /workspace /home/kodi/kodi-install
