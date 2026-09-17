@@ -22,13 +22,19 @@ jobs:
           sudo mkdir -p /home/kodi
           sudo chown -R "$USER":"$USER" /home/kodi
 
-      - name: Checkout repo into kodi-install
+      - name: Prepare /home/kodi
+        run: |
+          sudo mkdir -p /home/kodi
+          sudo chown -R "$USER":"$USER" /home/kodi
+
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: kodi-install
+
+      - name: Move repo into /home/kodi/kodi-install
+        run: cp -r "$GITHUB_WORKSPACE" /home/kodi/kodi-install
 
       - name: Exclude rotation patch from normal build
-        run: rm -f kodi-install/patches/0016-miniloong-internal-only-rotate270.patch
+        run: rm -f /home/kodi/kodi-install/patches/0016-miniloong-internal-only-rotate270.patch
 
       - name: Install build dependencies
         run: |
@@ -54,24 +60,24 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: .ccache
+          path: /home/kodi/.ccache
           key: kodi-ccache-normal-${{ github.sha }}
           restore-keys: |
             kodi-ccache-normal-
 
       - name: Build Kodi (normal)
         env:
-          CCACHE_DIR: .ccache
+          CCACHE_DIR: /home/kodi/.ccache
         run: |
           mkdir -p "$CCACHE_DIR"
-          cd kodi-install
+          cd /home/kodi/kodi-install
           env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
 
       - name: Locate output archive
         id: out
         run: |
           VER_NUM=$(echo "$KODI_TAG" | sed 's/-.*//')
-          echo "path=Kodi-${VER_NUM}.tar.xz" >> "$GITHUB_OUTPUT"
+          echo "path=/home/kodi/Kodi-${VER_NUM}.tar.xz" >> "$GITHUB_OUTPUT"
 
       - name: Upload Kodi (normal) artifact
         uses: actions/upload-artifact@v4
@@ -88,10 +94,16 @@ jobs:
           sudo mkdir -p /home/kodi
           sudo chown -R "$USER":"$USER" /home/kodi
 
-      - name: Checkout repo into kodi-install
+      - name: Prepare /home/kodi
+        run: |
+          sudo mkdir -p /home/kodi
+          sudo chown -R "$USER":"$USER" /home/kodi
+
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: kodi-install
+
+      - name: Move repo into /home/kodi/kodi-install
+        run: cp -r "$GITHUB_WORKSPACE" /home/kodi/kodi-install
 
       - name: Install build dependencies
         run: |
@@ -117,32 +129,32 @@ jobs:
       - name: Install vendored librga (device-extracted, RGA2-Lite2)
         run: |
           sudo mkdir -p /usr/local/include/rga
-          sudo cp kodi-install/vendor/rga/include/*.h /usr/local/include/rga/
-          sudo cp kodi-install/vendor/rga/lib/librga.so* /usr/local/lib/
+          sudo cp /home/kodi/kodi-install/vendor/rga/include/*.h /usr/local/include/rga/
+          sudo cp /home/kodi/kodi-install/vendor/rga/lib/librga.so* /usr/local/lib/
           sudo ldconfig
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: .ccache
+          path: /home/kodi/.ccache
           key: kodi-ccache-rotated-${{ github.sha }}
           restore-keys: |
             kodi-ccache-rotated-
 
       - name: Build Kodi (rotated)
         env:
-          CCACHE_DIR: .ccache
+          CCACHE_DIR: /home/kodi/.ccache
         run: |
           mkdir -p "$CCACHE_DIR"
-          cd kodi-install
+          cd /home/kodi/kodi-install
           env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
 
       - name: Locate and rename output archive
         id: out
         run: |
           VER_NUM=$(echo "$KODI_TAG" | sed 's/-.*//')
-          mv "Kodi-${VER_NUM}.tar.xz" "Kodi-${VER_NUM}-rotated.tar.xz"
-          echo "path=Kodi-${VER_NUM}-rotated.tar.xz" >> "$GITHUB_OUTPUT"
+          mv "/home/kodi/Kodi-${VER_NUM}.tar.xz" "/home/kodi/Kodi-${VER_NUM}-rotated.tar.xz"
+          echo "path=/home/kodi/Kodi-${VER_NUM}-rotated.tar.xz" >> "$GITHUB_OUTPUT"
 
       - name: Upload Kodi (rotated) artifact
         uses: actions/upload-artifact@v4
