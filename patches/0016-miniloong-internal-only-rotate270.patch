@@ -393,7 +393,7 @@ index 3dd4ee9..f0d01b7 100644
 +// Kodi startup by checking the device identity file dArkOS writes for every
 +// device. Read once and cached for the life of the process.
 +const std::string MINILOONG_DEVICE_FILE = "/home/ark/.config/.DEVICE";
-+const std::string MINILOONG_DEVICE_TAG = "MINILOONG";
++const std::string MINILOONG_DEVICE_TAG = "rotated";
 +
 +bool IsMiniloongDevice()
 +{
