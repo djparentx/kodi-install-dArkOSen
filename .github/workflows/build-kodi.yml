@@ -62,6 +62,9 @@ jobs:
               rm -f /home/kodi/kodi-install/patches/0016-miniloong-internal-only-rotate270.patch
 
               export CCACHE_DIR=/home/kodi/.ccache
+              cp /home/kodi/kodi-install/vendor/gbm/libgbm.so /usr/lib/aarch64-linux-gnu/libgbm.so
+              cp /home/kodi/kodi-install/vendor/gbm/gbm.h /usr/include/gbm.h
+              ldconfig
               cd /home/kodi/kodi-install
               env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
 
@@ -134,6 +137,9 @@ jobs:
               ldconfig
 
               export CCACHE_DIR=/home/kodi/.ccache
+              cp /home/kodi/kodi-install/vendor/gbm/libgbm.so /usr/lib/aarch64-linux-gnu/libgbm.so
+              cp /home/kodi/kodi-install/vendor/gbm/gbm.h /usr/include/gbm.h
+              ldconfig
               cd /home/kodi/kodi-install
               env "PATH=/usr/lib/ccache:$PATH" bash ArkOS-Kodi-Build.sh "$KODI_TAG"
 
