@@ -1,6 +1,6 @@
 --- a/xbmc/video/VideoUtils.cpp
 +++ b/xbmc/video/VideoUtils.cpp
-@@ -358,8 +358,13 @@
+@@ -356,8 +356,13 @@
  
    if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_VIDEO))
    {
@@ -17,7 +17,7 @@
  
 --- a/xbmc/music/MusicUtils.cpp
 +++ b/xbmc/music/MusicUtils.cpp
-@@ -683,8 +683,13 @@
+@@ -681,8 +681,13 @@
  
    if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_MUSIC))
    {
