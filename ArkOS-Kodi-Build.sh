@@ -8,7 +8,7 @@ else
   echo ""
   echo "Please provide the git-tag (such as 20.3-Nexus) of kodi you'd like to build"
   echo "Some possible values are as follows:"
-  git ls-remote https://github.com/xbmc/xbmc.git --h --sort origin "refs/tags/*" | cut -d "/" -f3 | grep "Nexus\|Matrix\|Omega"
+git ls-remote https://github.com/djparentx/xbmc.git --h --sort origin "refs/heads/*" | cut -d "/" -f3 | grep "Nexus\|Matrix\|Omega"
   echo ""
   exit 1
 fi
@@ -42,12 +42,13 @@ if [ -d "kodi-source" ]; then
   rm -rf kodi-source
 fi
 
-if [[ -z $(git ls-remote https://github.com/xbmc/xbmc.git --h --sort origin "refs/tags/*" | cut -d "/" -f3 | grep -x "$KODI_SOURCE_TAG") ]]; then
-  echo "Sorry, $KODI_SOURCE_TAG doesn't seem to exist in the kodi git"
-  echo ""
-  exit 1
+if [[ -z $(git ls-remote https://github.com/djparentx/xbmc.git --h --sort origin "refs/heads/*" | cut -d "/" -f3 | grep -x "$KODI_SOURCE_TAG") ]]; then
+echo "Sorry, $KODI_SOURCE_TAG doesn't seem to exist in the dArkOSen kodi git"
+echo ""
+exit 1
 fi
-git clone https://github.com/xbmc/xbmc.git kodi-source
+
+git clone https://github.com/djparentx/xbmc.git kodi-source
 cd kodi-source
 git checkout ${KODI_SOURCE_TAG}
 if [ $? != 0 ]; then
