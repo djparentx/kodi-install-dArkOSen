@@ -1,23 +1,8 @@
---- a/xbmc/video/VideoUtils.cpp
-+++ b/xbmc/video/VideoUtils.cpp
-@@ -356,8 +356,13 @@
- 
-   if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_VIDEO))
-   {
--    playList.Swap(0, playList.FindOrder(pos));
--    pos = 0;
-+    if (itemToPlay)
-+    {
-+      // a specific item was clicked - keep it playing first
-+      playList.Swap(0, playList.FindOrder(pos));
-+      pos = 0;
-+    }
-+    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
-   }
- 
+diff --git a/xbmc/music/MusicUtils.cpp b/xbmc/music/MusicUtils.cpp
+index b86143e271..3273e661c8 100644
 --- a/xbmc/music/MusicUtils.cpp
 +++ b/xbmc/music/MusicUtils.cpp
-@@ -681,8 +681,13 @@
+@@ -683,8 +683,13 @@ void AddItemToPlayListAndPlay(const std::shared_ptr<CFileItem>& itemToQueue,
  
    if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_MUSIC))
    {
@@ -32,3 +17,24 @@
 +    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
    }
  
+   playlistPlayer.SetCurrentPlaylist(PLAYLIST::TYPE_MUSIC);
+diff --git a/xbmc/video/VideoUtils.cpp b/xbmc/video/VideoUtils.cpp
+index 7143df7c8c..5c966e1d3b 100644
+--- a/xbmc/video/VideoUtils.cpp
++++ b/xbmc/video/VideoUtils.cpp
+@@ -358,8 +358,13 @@ void AddItemToPlayListAndPlay(const std::shared_ptr<CFileItem>& itemToQueue,
+ 
+   if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_VIDEO))
+   {
+-    playList.Swap(0, playList.FindOrder(pos));
+-    pos = 0;
++    if (itemToPlay)
++    {
++      // a specific item was clicked - keep it playing first
++      playList.Swap(0, playList.FindOrder(pos));
++      pos = 0;
++    }
++    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
+   }
+ 
+   playlistPlayer.SetCurrentPlaylist(PLAYLIST::TYPE_VIDEO);
