@@ -1,0 +1,33 @@
+--- a/xbmc/video/VideoUtils.cpp
++++ b/xbmc/video/VideoUtils.cpp
+@@ -358,8 +358,13 @@
+ 
+   if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_VIDEO))
+   {
+-    playList.Swap(0, playList.FindOrder(pos));
+-    pos = 0;
++    if (itemToPlay)
++    {
++      // a specific item was clicked - keep it playing first
++      playList.Swap(0, playList.FindOrder(pos));
++      pos = 0;
++    }
++    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
+   }
+ 
+--- a/xbmc/music/MusicUtils.cpp
++++ b/xbmc/music/MusicUtils.cpp
+@@ -683,8 +683,13 @@
+ 
+   if (playlistPlayer.IsShuffled(PLAYLIST::TYPE_MUSIC))
+   {
+-    playList.Swap(0, playList.FindOrder(pos));
+-    pos = 0;
++    if (itemToPlay)
++    {
++      // a specific item was clicked - keep it playing first
++      playList.Swap(0, playList.FindOrder(pos));
++      pos = 0;
++    }
++    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
+   }

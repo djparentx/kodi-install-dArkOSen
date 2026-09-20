@@ -5,12 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       kodi_tag:
-        description: 'djparentx/xbmc branch to build (e.g. 21.3-Omega-dArkOSen)'
+        description: 'xbmc/xbmc git tag to build (e.g. 21.3-Omega)'
         required: false
-        default: '21.3-Omega-dArkOSen'
+        default: '21.3-Omega'
 
 env:
-  KODI_TAG: ${{ github.event.inputs.kodi_tag || '21.3-Omega-dArkOSen' }}
+  KODI_TAG: ${{ github.event.inputs.kodi_tag || '21.3-Omega' }}
 
 jobs:
   kodi:
