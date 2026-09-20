@@ -42,8 +42,8 @@ if [ -d "kodi-source" ]; then
   rm -rf kodi-source
 fi
 
-if [[ -z $(git ls-remote https://github.com/xbmc/xbmc.git --h --sort origin "refs/heads/*" | cut -d "/" -f3 | grep -x "$KODI_SOURCE_TAG") ]]; then
-echo "Sorry, $KODI_SOURCE_TAG doesn't seem to exist in the dArkOSen kodi git"
+if [[ -z $(git ls-remote https://github.com/xbmc/xbmc.git --t --sort origin "refs/tags/*" | cut -d "/" -f3 | grep -x "$KODI_SOURCE_TAG") ]]; then
+echo "Sorry, $KODI_SOURCE_TAG doesn't seem to exist in the kodi git"
 echo ""
 exit 1
 fi
