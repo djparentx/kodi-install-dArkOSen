@@ -31,3 +31,4 @@
 +    }
 +    // else: no specific item requested, list is already shuffled - play from pos 0 as-is
    }
+ 
