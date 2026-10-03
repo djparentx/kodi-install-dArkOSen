@@ -1,0 +1,136 @@
+diff --git a/xbmc/windowing/gbm/CMakeLists.txt b/xbmc/windowing/gbm/CMakeLists.txt
+index 0a7bdf6..af6476a 100644
+--- a/xbmc/windowing/gbm/CMakeLists.txt
++++ b/xbmc/windowing/gbm/CMakeLists.txt
+@@ -28,8 +28,8 @@ endif()
+ core_add_library(windowing_gbm)
+ 
+ # dArkOS: RGA software display rotation. Whether it activates is decided at
+-# Kodi runtime (CDRMUtils::InitDrm() checks /home/ark/.config/.DEVICE for
+-# "Miniloong" — see DRMUtils.cpp and RGARotate.cpp), not by a cmake flag, so
++# Kodi runtime (CDRMUtils::InitDrm() enables it when the panel's native mode is
++# portrait, height > width — see DRMUtils.cpp and RGARotate.cpp), not by a cmake flag, so
+ # this is linked unconditionally. librga + headers are installed for all
+ # rk3566 64-bit builds by build_deps.sh (BSP librga, RGA3 ABI) at
+ # /usr/local/include/rga.
+diff --git a/xbmc/windowing/gbm/RGARotate.h b/xbmc/windowing/gbm/RGARotate.h
+index 41e656c..7232f9d 100644
+--- a/xbmc/windowing/gbm/RGARotate.h
++++ b/xbmc/windowing/gbm/RGARotate.h
+@@ -17,8 +17,8 @@
+ // before page-flip, mirroring sdl2-patch-0004.
+ //
+ // Whether to rotate is decided at Kodi runtime, not at compile time:
+-// CDRMUtils::InitDrm() checks /home/ark/.config/.DEVICE for "MINILOONG" and
+-// only sets m_rotate when it finds it (see DRMUtils.cpp). CRGARotate is only
++// CDRMUtils::InitDrm() sets m_rotate when the panel's native mode is portrait
++// (height > width; see DRMUtils.cpp). CRGARotate is only
+ // ever constructed by WinSystemGbmEGLContext when m_DRM->IsRotated() is true,
+ // so on every other device this class is simply never instantiated.
+ 
+diff --git a/xbmc/windowing/gbm/drm/DRMUtils.cpp b/xbmc/windowing/gbm/drm/DRMUtils.cpp
+index 2bb4295..dec67ce 100644
+--- a/xbmc/windowing/gbm/drm/DRMUtils.cpp
++++ b/xbmc/windowing/gbm/drm/DRMUtils.cpp
+@@ -18,8 +18,6 @@
+ #include "PlatformDefs.h"
+ 
+ #include <algorithm>
+-#include <cctype>
+-#include <fstream>
+ 
+ using namespace KODI::WINDOWING::GBM;
+ 
+@@ -27,40 +25,6 @@ namespace
+ {
+ const std::string SETTING_VIDEOSCREEN_LIMITGUISIZE = "videoscreen.limitguisize";
+ 
+-// dArkOS: some rk3566 handhelds (e.g. the miniloong) have a physically
+-// portrait panel used in landscape and need the RGA software rotation path
+-// (see RGARotate.h). Rather than gating that at compile time, detect it at
+-// Kodi startup by checking the device identity file dArkOS writes for every
+-// device. Read once and cached for the life of the process.
+-const std::string MINILOONG_DEVICE_FILE = "/home/ark/.config/.DEVICE";
+-const std::string MINILOONG_DEVICE_TAG = "rotated";
+-
+-bool IsMiniloongDevice()
+-{
+-  static const bool isMiniloong = []()
+-  {
+-    std::ifstream deviceFile(MINILOONG_DEVICE_FILE);
+-    if (!deviceFile.is_open())
+-      return false;
+-
+-    std::string contents((std::istreambuf_iterator<char>(deviceFile)),
+-                          std::istreambuf_iterator<char>());
+-
+-    // Case-insensitive match — dArkOS doesn't guarantee a specific casing for
+-    // the contents of .DEVICE, so compare lowercased copies of both sides.
+-    std::transform(contents.begin(), contents.end(), contents.begin(),
+-                    [](unsigned char c) { return std::tolower(c); });
+-
+-    std::string tag = MINILOONG_DEVICE_TAG;
+-    std::transform(tag.begin(), tag.end(), tag.begin(),
+-                    [](unsigned char c) { return std::tolower(c); });
+-
+-    return contents.find(tag) != std::string::npos;
+-  }();
+-
+-  return isMiniloong;
+-}
+-
+ void DrmFbDestroyCallback(gbm_bo* bo, void* data)
+ {
+   drm_fb* fb = static_cast<drm_fb*>(data);
+@@ -437,15 +401,6 @@ bool CDRMUtils::InitDrm()
+   if (m_fd < 0)
+     return false;
+ 
+-  // dArkOS: enable RGA software rotation when /home/ark/.config/.DEVICE
+-  // identifies this as a Miniloong device. Set before planes/resolutions are
+-  // enumerated so the GUI is configured landscape while the panel mode stays
+-  // portrait.
+-  m_rotate = IsMiniloongDevice();
+-  if (m_rotate)
+-    CLog::Log(LOGINFO, "CDRMUtils::{} - RGA software display rotation enabled (ROT_270) - Miniloong device detected",
+-              __FUNCTION__);
+-
+   /* caps need to be set before allocating connectors, encoders, crtcs, and planes */
+   int ret = drmSetClientCap(m_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+   if (ret)
+@@ -516,10 +471,20 @@ bool CDRMUtils::InitDrm()
+   if (!FindCrtc())
+     return false;
+ 
+-  if (!FindPlanes())
++  if (!FindPreferredMode())
+     return false;
+ 
+-  if (!FindPreferredMode())
++  // dArkOS: a portrait native mode (height > width) is driven as a landscape
++  // screen via RGA software rotation (ROT_270). Must be decided before
++  // FindPlanes() (format selection) and before resolutions are enumerated.
++  m_rotate = (m_mode->vdisplay > m_mode->hdisplay);
++  if (m_rotate)
++    CLog::Log(LOGINFO,
++              "CDRMUtils::{} - portrait panel {}x{} detected, RGA software rotation enabled "
++              "(ROT_270)",
++              __FUNCTION__, m_mode->hdisplay, m_mode->vdisplay);
++
++  if (!FindPlanes())
+     return false;
+ 
+   ret = drmSetMaster(m_fd);
+diff --git a/xbmc/windowing/gbm/drm/DRMUtils.h b/xbmc/windowing/gbm/drm/DRMUtils.h
+index cb4e17f..42b5c6e 100644
+--- a/xbmc/windowing/gbm/drm/DRMUtils.h
++++ b/xbmc/windowing/gbm/drm/DRMUtils.h
+@@ -95,7 +95,7 @@ protected:
+   int m_height = 0;
+ 
+   // dArkOS rk3566: true when RGA software rotation is enabled for this device,
+-  // detected at runtime in InitDrm() from /home/ark/.config/.DEVICE.
++  // detected at runtime in InitDrm() from the panel mode (portrait: height > width).
+   bool m_rotate{false};
+ 
+   int m_inFenceFd{-1};
